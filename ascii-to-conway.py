@@ -1,7 +1,7 @@
 import sys, unicodedata
 import numpy as np
 
-def read_between_markers(file_path, start_marker="STARTCHAR", end_marker="ENDCHAR", onlyascii = True):
+def read_between_markers(file_path, start_marker="STARTCHAR", end_marker="ENDCHAR", onlyascii = False):
     contents = {}
     current_key = None
     current_section = []
@@ -35,48 +35,36 @@ def read_between_markers(file_path, start_marker="STARTCHAR", end_marker="ENDCHA
 def form_translator(file_to_read):
     sections = read_between_markers(file_to_read)
     translated_form = {}
-
     for key, value in sections.items():
-        if unicodedata.category(key) == "Cc":
-            continue  # Skip null character and non-printable keys
-
         # Get the bounding width from the third element
-        bounding_width = int(value[3].split()[2])
+        bounding_width = int(value[3].split()[1])
 
-        # Translate each code into binary
         translated_form[key] = [
-            list(bin(int(code, 16))[2:].zfill(bounding_width - 8))  # Remove '0b' and pad to width
-            for code in value[5:]  # Skip first five lines
+            list(bin(int(code, 16))[2:].zfill(bounding_width))
+            for code in value[5:]
         ]
-    return translated_form
+    return (translated_form)
 
 def translate_font_file(file_path, chars):
     master_dictionary = form_translator(file_path)
-
-    # Collect binary arrays for all specified characters
     char_arrays = [master_dictionary.get(char, []) for char in chars]
 
-    # Find the maximum length to ensure we combine properly
-    max_length = max(len(arr) for arr in char_arrays)
-
-    # Create combined 2D array
+    # Combine arrays by merging rows from each character
     combined_array = []
-    for i in range(max_length):
+    max_rows = max(len(char) for char in char_arrays)  # Find the longest character array
+
+    for row_index in range(max_rows):
         combined_row = []
-        for arr in char_arrays:
-            # Get the i-th row from the character array, filling with empty strings if out of bounds
-            row = arr[i] if i < len(arr) else [''] * len(arr[0]) if arr else []  # Fill with empty if out of bounds
-            combined_row.extend(row)  # Merge the rows into combined_row
+        for char in char_arrays:
+            if row_index < len(char):
+                combined_row.extend(char[row_index])  # Append row if it exists for the character
+            else:
+                # Fill missing rows with blank spaces if character has fewer rows
+                combined_row.extend(['0'] * len(char[0]))
+        combined_array.append(combined_row)
 
-        combined_array.append(combined_row)  # Append to the combined array
-
-
-    # Convert combined_array to a NumPy array of type string
-    combined_array_np = np.array(combined_array, dtype=str)
-
-    # Return the resulting combined array without extra newlines
-    return '\n'.join([''.join(row) for row in combined_array_np.tolist()])  # Ensure to convert to list
-
+    transfer_array = "\n".join(["".join(row) for row in combined_array])
+    return (transfer_array)
 
 def rle_encode(data):
     if not data:
@@ -120,12 +108,10 @@ def conway_rle_translate(result):
             print(line + "$", end='')
     print("\n")
 
-
 if __name__ == "__main__":
     # Example usage
     file_path = 'font.bdf'  # Replace with your actual file path
 
     #chars_to_translate = 'testing'  # The characters you want to combine
-    chars_to_translate = sys.argv[1]
-    result = translate_font_file(file_path, chars_to_translate)
+    result = translate_font_file(file_path, "8\x00 あ ぃ い ぅ う ぇ え ぉ お ")
     conway_rle_translate(result)
