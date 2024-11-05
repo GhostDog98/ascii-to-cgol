@@ -1,3 +1,4 @@
+# licensed under the AGPLv3 or later
 import sys, unicodedata
 import numpy as np
 
