@@ -119,5 +119,5 @@ if __name__ == "__main__":
     file_path = 'font.bdf'  # Replace with your actual file path
 
     #chars_to_translate = 'testing'  # The characters you want to combine
-    result = translate_font_file(file_path, "8\x00 あ ぃ い ぅ う ぇ え ぉ お ")
+    result = translate_font_file(file_path, "test123!$~")
     conway_rle_translate(result)
