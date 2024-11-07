@@ -1,35 +1,33 @@
 #include <iostream>
 #include <string>
 #include <sstream>
-#include <iostream>
 #include <fstream>
-#include <string>
 #include <unordered_map>
 #include <vector>
-#include <sstream>
-#include <stdexcept>
 #include <bitset>
 #include <format>
 #include <random>
+#include <atomic>
+#include <signal.h>
 using namespace std;
 
 atomic<bool> running(true);
 
-string runLengthEncode(const string & str){
-    int i = str.size();
-    string letters;
+string runLengthEncode(const string& str) {
+    int n = str.size();
+    string encoded;
 
-    for (int j = 0; j < i; ++j){
+    for (int i = 0; i < n; ++i) {
         int count = 1;
-        while (str[j] == str[j+1]){
-            count++;
-            j++;
+        while (i + 1 < n && str[i] == str[i + 1]) {
+            ++count;
+            ++i;
         }
-        letters += std::to_string(count);
-        letters.push_back(str[j]);
+        encoded += to_string(count) + str[i];
     }
-    return letters;
+    return encoded;
 }
+
 unordered_map<char, vector<string>> readBetweenMarkers(const string& filePath, const string& startMarker = "STARTCHAR", const string& endMarker = "ENDCHAR") {
     unordered_map<char, vector<string>> contents;
     ifstream file(filePath);
@@ -42,25 +40,20 @@ unordered_map<char, vector<string>> readBetweenMarkers(const string& filePath, c
     vector<string> currentSection;
 
     while (getline(file, line)) {
-        
-
-        // Trim leading and trailing whitespace
         line.erase(0, line.find_first_not_of(" \t\n\r"));
         line.erase(line.find_last_not_of(" \t\n\r") + 1);
 
-        if (line.rfind(startMarker, 0) == 0) { // Line starts with startMarker
+        if (line.rfind(startMarker, 0) == 0) {
             if (currentKey != '\0') {
                 contents[currentKey] = currentSection;
             }
 
-            // Extract key from marker
             string hexStr = line.substr(startMarker.length());
-            hexStr.erase(0, hexStr.find_first_not_of(" \t\n\r")); // Trim whitespace around marker
-            hexStr.erase(0, hexStr.find_first_of("+")+1); // remove "U+"
+            hexStr.erase(0, hexStr.find_first_not_of(" \t\n\r"));
+            hexStr.erase(0, hexStr.find_first_of("+") + 1);
 
-            int hexValue = stoi(hexStr, nullptr, 16); // convert B16 string to b10 number
-            
-            currentKey = static_cast<char>(hexValue); // convert to char
+            int hexValue = stoi(hexStr, nullptr, 16);
+            currentKey = static_cast<char>(hexValue);
             currentSection.clear();
         } else if (line == endMarker && currentKey != '\0') {
             contents[currentKey] = currentSection;
@@ -70,7 +63,6 @@ unordered_map<char, vector<string>> readBetweenMarkers(const string& filePath, c
         }
     }
 
-    // Handle the last section if the file ends without an ENDCHAR
     if (currentKey != '\0') {
         contents[currentKey] = currentSection;
     }
@@ -79,59 +71,52 @@ unordered_map<char, vector<string>> readBetweenMarkers(const string& filePath, c
     return contents;
 }
 
-unordered_map<char, string> form_translator(string file_to_read){
+vector<string> form_translator(const string& file_to_read) {
+    vector<string> translated_sections(95);
     unordered_map<char, vector<string>> sections = readBetweenMarkers(file_to_read);
-    unordered_map<char, string> translated_sections;
 
-    for (const auto& [key, lines] : sections) { // for each key-value pair (for key, value in dict:)
+    for (const auto& [key, lines] : sections) {
         string transformed_part;
-        for (size_t i = 5; i < 5+16; ++i) { // for each section of codes. Each of these are 16 long, and 5 lines in
-            int line_value = stoi(lines[i], nullptr, 16); // convert from base16 string to base10 int
-            string binary = bitset<8>(line_value).to_string() + "\n"; // then convert to binary, and add a newline
-            transformed_part.append(binary); // append to our final string
+        for (size_t i = 5; i < 5 + 16; ++i) {
+            int line_value = stoi(lines[i], nullptr, 16);
+            string binary = bitset<8>(line_value).to_string() + "\n";
+            transformed_part.append(binary);
         }
-    
-        translated_sections[key] = transformed_part; // assign that multiline string to the master dict
+        translated_sections[key - 32] = transformed_part;
     }
 
     return translated_sections;
 }
 
-
-
-string translateFontFile(const string& chars, const unordered_map<char, string>& masterDictionary) {
-    // Vector to store rows of the output
+string translateFontFile(const string& chars, const vector<string>& masterDictionary) {
     vector<string> combinedRows;
 
-    // Process each character in the input
     for (char c : chars) {
-        if (masterDictionary.count(c)) {
-            istringstream stream(masterDictionary.at(c));
+        if (c >= 32 && c <= 126) {
+            const string& charData = masterDictionary[c - 32];
+            istringstream stream(charData);
             string line;
             size_t rowIndex = 0;
 
-            // Read the binary string row by row
             while (getline(stream, line)) {
                 if (rowIndex >= combinedRows.size()) {
-                    combinedRows.emplace_back(); // Add a new row if needed
+                    combinedRows.emplace_back();
                 }
-                combinedRows[rowIndex] += line; // Append the line horizontally
+                combinedRows[rowIndex] += line;
                 ++rowIndex;
             }
         } else {
-            // Handle missing characters with blank rows
-            size_t charHeight = 16; // Assuming each character's binary representation is 16 rows
-            size_t charWidth = 8;  // Assuming each character's binary representation is 8 bits wide
+            size_t charHeight = 16;
+            size_t charWidth = 8;
             for (size_t rowIndex = 0; rowIndex < charHeight; ++rowIndex) {
                 if (rowIndex >= combinedRows.size()) {
-                    combinedRows.emplace_back(); // Add a new row if needed
+                    combinedRows.emplace_back();
                 }
-                combinedRows[rowIndex] += string(charWidth, '0'); // Fill with blanks
+                combinedRows[rowIndex] += string(charWidth, '0');
             }
         }
     }
 
-    // Combine rows into a single string
     ostringstream result;
     for (const auto& row : combinedRows) {
         result << row << '\n';
@@ -139,61 +124,53 @@ string translateFontFile(const string& chars, const unordered_map<char, string>&
     return result.str();
 }
 
-
-string conway_encode(const string& chars, unordered_map<char, string> masterDictionary){
+string conway_encode(const string& chars, const vector<string>& masterDictionary) {
     string result = translateFontFile(chars, masterDictionary);
 
-    // Vector to store the lines
     vector<string> lines;
-
-    // Use a stringstream to split by lines
     istringstream stream(result);
     string line;
     int x_max = 0, y_max = 0;
 
     while (getline(stream, line)) {
-        y_max++;
-        x_max = max(x_max, static_cast<int>(line.size()));
-        if(line.find("1") == string::npos){
-            line.erase(0, line.find_first_not_of('0')); // erase leading zeros
+        if (!line.empty() && line.find("1") != string::npos) {
+            x_max = max(x_max, static_cast<int>(line.size()));
+            replace(line.begin(), line.end(), '0', 'b');
+            replace(line.begin(), line.end(), '1', 'o');
+            lines.push_back(runLengthEncode(line));
         }
-        replace(line.begin(), line.end(), '0', 'b');
-        replace(line.begin(), line.end(), '1', 'o');
-        lines.push_back(runLengthEncode(line)); // Add each line to the vector
     }
+    y_max = static_cast<int>(lines.size());
 
-    
-    // Combine all rows into the final transfer array
     ostringstream final_stream;
+    final_stream << "$$$\n";
+    final_stream << format("#C Generated by ASCII-to-Conway program\n#r 23/3\nx = {}, y = {}\n", x_max, y_max);
 
-    final_stream << (
-        format(
-            "#C Generated by Lilly's ascii-to-conway\
-            program\n#r 23/3\nx = {}, y = {}\n", x_max, y_max
-        )
-    );
-    for (const auto& line : lines) {
-        final_stream << line << '$';
+    for (size_t i = 0; i < lines.size(); ++i) {
+        final_stream << lines[i];
+        if (i < lines.size() - 1) {
+            final_stream << "$";
+        }
     }
-    final_stream << endl;
+    final_stream << "$$$";
+
     return final_stream.str();
 }
 
-const std::string CHARACTERS = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
-static std::random_device rd;
-static std::mt19937 generator(rd());
-static std::uniform_int_distribution<size_t> distribution(0, CHARACTERS.size() - 1);
 
-std::string random_string(std::size_t length) {
-    std::string result(length, '0');
+const string CHARACTERS = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+random_device rd;
+mt19937 generator(rd());
+uniform_int_distribution<size_t> distribution(0, CHARACTERS.size() - 1);
+
+string random_string(size_t length) {
+    string result(length, '0');
     for (auto& ch : result) {
         ch = CHARACTERS[distribution(generator)];
     }
     return result;
 }
 
-
-// Signal handler to stop the loop
 void handle_signal(int signal) {
     if (signal == SIGINT) {
         running = false;
@@ -201,44 +178,40 @@ void handle_signal(int signal) {
 }
 
 int main() {
-
-    // cache this value so we only need to read the file and parse it once...
-    unordered_map <char, string> masterDict = form_translator("font-trimmed.bdf");    
+    vector<string> masterDictionary = form_translator("font-trimmed.bdf");
+    cout << conway_encode("test123!$~", masterDictionary) << endl;
+/*
     try {
-
         cout.precision(3);
         signal(SIGINT, handle_signal);
 
-        size_t testLength = 12; // Length of random strings
+        size_t testLength = 12;
         size_t totalChars = 0;
         size_t iterations = 0;
 
-        // Start timer
         auto start = chrono::high_resolution_clock::now();
-
         cout << "Press Ctrl+C to stop the test." << endl;
 
-        // Run continuously until Ctrl+C is pressed
         while (running) {
             string randomStr = random_string(testLength);
-            string encoded = conway_encode(randomStr, masterDict);
+            string encoded = conway_encode(randomStr, masterDictionary);
             totalChars += randomStr.size();
             ++iterations;
 
-            // Update performance every 1000 iterations
             if (iterations % 1000 == 0) {
                 auto now = chrono::high_resolution_clock::now();
                 chrono::duration<double> elapsed = now - start;
-                double charsPerSecond = totalChars / elapsed.count();
-                charsPerSecond = charsPerSecond / 1000;                
-                cout << "Iterations: " << iterations 
+                double charsPerSecond = totalChars / elapsed.count() / 1000;
+                cout << "Iterations: " << iterations
                      << ", Total KiloChars: " << totalChars / 1000
-                     << ", Performance: " << charsPerSecond 
+                     << ", Performance: " << charsPerSecond
                      << " kc/sec\r" << flush;
             }
         }
     } catch (const exception& e) {
         cerr << "Error: " << e.what() << endl;
         return 1;
-    }
+    }*/
+
+    return 0;
 }

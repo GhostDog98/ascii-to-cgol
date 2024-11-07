@@ -6,7 +6,7 @@ CXXFLAGS = -std=c++20 -Wall -Wextra -pedantic -Ofast
 TARGET = conway
 
 # Source files
-SRC = main-test.cpp
+SRC = main.cpp
 
 # Build target
 all: $(TARGET)
