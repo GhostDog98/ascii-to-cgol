@@ -1,5 +1,5 @@
 # Compiler and flags
-CXX = g++
+CXX = g++-14
 CXXFLAGS = -std=c++20 -Wall -Wextra -pedantic -Ofast
 
 # Target executable name

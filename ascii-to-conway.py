@@ -116,8 +116,8 @@ def conway_rle_translate(result):
 
 if __name__ == "__main__":
     # Example usage
-    file_path = 'font.bdf'  # Replace with your actual file path
+    file_path = 'comic_sans.bdf'  # Replace with your actual file path
 
     #chars_to_translate = 'testing'  # The characters you want to combine
-    result = translate_font_file(file_path, "test123!$~")
+    result = translate_font_file(file_path, "!")
     conway_rle_translate(result)
