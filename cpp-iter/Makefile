@@ -1,6 +1,12 @@
 # Compiler and flags
-CXX = g++-14
+CXX = g++
 CXXFLAGS = -std=c++20 -Wall -Wextra -pedantic -Ofast
+
+# Check the operating system
+ifeq ($(shell uname), Darwin)
+    # macOS (Darwin)
+    CXX := g++-14
+endif
 
 # Target executable name
 TARGET = conway
