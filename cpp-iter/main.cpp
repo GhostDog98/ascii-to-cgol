@@ -153,10 +153,12 @@ mutex statsMutex;
 size_t totalChars = 0;
 size_t iterations = 0;
 
+#include <csignal>
+#include <thread>
+
 void workerFunction(size_t start, size_t end, const vector<string>& masterDictionary, size_t testLength, const string& characters, const vector<const char*>& apgluxeArgs) {
     string currentPattern(testLength, characters.front());
 
-    // Create a pipe for communication
     int pipefd[2];
     if (pipe(pipefd) == -1) {
         perror("pipe");
@@ -170,24 +172,16 @@ void workerFunction(size_t start, size_t end, const vector<string>& masterDictio
     }
 
     if (pid == 0) {  // Child process
-        // Close the write end of the pipe
-        close(pipefd[1]);
-
-        // Redirect the read end of the pipe to stdin
+        close(pipefd[1]);  // Close unused write end
         dup2(pipefd[0], STDIN_FILENO);
-
-        // Close the read end of the pipe after duplication
         close(pipefd[0]);
 
-        // Execute apgluxe with collected args
         execvp("./apgluxe", const_cast<char* const*>(apgluxeArgs.data()));
-        perror("execlp"); // If exec failed
+        perror("execvp");
         exit(EXIT_FAILURE);
     } else {  // Parent process
-        // Close the read end of the pipe
-        close(pipefd[0]);
+        close(pipefd[0]);  // Close unused read end
 
-        // Write to the pipe
         for (size_t i = start; i < end && running; ++i) {
             generate_combination(i, testLength, characters, currentPattern);
             string encoded = conway_encode(currentPattern, masterDictionary);
@@ -205,21 +199,27 @@ void workerFunction(size_t start, size_t end, const vector<string>& masterDictio
                 ++iterations;
             }
         }
+        cout << "Finished generating..." << endl;
+        write(pipefd[1], "\n\n\n\n\n\n\n", 8);
+        close(pipefd[1]);  // Signal EOF by closing the write end
 
-        // Send two newlines before closing the write end of the pipe
-        string endTransmission = "\n\n";
-        if (write(pipefd[1], endTransmission.c_str(), endTransmission.size()) == -1) {
-            perror("write");
-        }
+        // Wait for child process to exit, or timeout after 10 seconds
+        std::thread timeoutThread([pid]() {
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+            // If the child hasn't exited, send it a SIGTERM signal
+            if (kill(pid, 0) == 0) {  // Check if the process is still running
+                kill(pid, SIGTERM);
+                cerr << "Child process did not exit in time and was terminated." << endl;
+            }
+        });
 
-        // Close the write end of the pipe to signal EOF
-        close(pipefd[1]);
-        
-        // Wait for the child process to exit
         int status;
         waitpid(pid, &status, 0);
 
-        // Check the status of the child process
+        if (timeoutThread.joinable()) {
+            timeoutThread.join();
+        }
+
         if (WIFEXITED(status)) {
             int exitStatus = WEXITSTATUS(status);
             if (exitStatus != 0) {
@@ -232,9 +232,6 @@ void workerFunction(size_t start, size_t end, const vector<string>& masterDictio
 }
 
 
-
-// ./recompile --symmetry letters_stdin
-// then `./conway -l <n> -- -t 1 -n 999999
 int main(int argc, char* argv[]) {
     size_t testLength = 2;  // Default value for test length
     int opt;
