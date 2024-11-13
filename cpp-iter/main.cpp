@@ -14,8 +14,11 @@
 #include <vector>
 #include <cstring>
 #include <climits>
+#include <functional>
 #include "master.hpp"
+#include <sys/wait.h>
 #include <unistd.h>
+#include "preprocessing.hpp"
 using namespace std;
 
 atomic<bool> running(true);
@@ -37,66 +40,6 @@ string runLengthEncode(const string& str) {
     return encoded;
 }
 
-unordered_map<char, vector<string>> readBetweenMarkers(const string& filePath, const string& startMarker = "STARTCHAR",
-                                                       const string& endMarker = "ENDCHAR") {
-    unordered_map<char, vector<string>> contents;
-    ifstream file(filePath);
-    if (!file.is_open()) {
-        throw runtime_error("Failed to open the file: " + filePath);
-    }
-
-    string line;
-    char currentKey = '\0';
-    vector<string> currentSection;
-
-    while (getline(file, line)) {
-        line.erase(0, line.find_first_not_of(" \t\n\r"));
-        line.erase(line.find_last_not_of(" \t\n\r") + 1);
-
-        if (line.rfind(startMarker, 0) == 0) {
-            if (currentKey != '\0') {
-                contents[currentKey] = currentSection;
-            }
-
-            string hexStr = line.substr(startMarker.length());
-            hexStr.erase(0, hexStr.find_first_not_of(" \t\n\r"));
-            hexStr.erase(0, hexStr.find_first_of("+") + 1);
-
-            int hexValue = stoi(hexStr, nullptr, 16);
-            currentKey = static_cast<char>(hexValue);
-            currentSection.clear();
-        } else if (line == endMarker && currentKey != '\0') {
-            contents[currentKey] = currentSection;
-            currentKey = '\0';
-        } else if (currentKey != '\0') {
-            currentSection.push_back(line);
-        }
-    }
-
-    if (currentKey != '\0') {
-        contents[currentKey] = currentSection;
-    }
-
-    file.close();
-    return contents;
-}
-
-vector<string> form_translator(const string& file_to_read) {
-    vector<string> translated_sections(95);
-    unordered_map<char, vector<string>> sections = readBetweenMarkers(file_to_read);
-
-    for (const auto& [key, lines] : sections) {
-        string transformed_part;
-        for (size_t i = 5; i < 5 + 16; ++i) {
-            int line_value = stoi(lines[i], nullptr, 16);
-            string binary = bitset<8>(line_value).to_string() + "\n";
-            transformed_part.append(binary);
-        }
-        translated_sections[key - 32] = transformed_part;
-    }
-
-    return translated_sections;
-}
 
 string translateFontFile(const string& chars, const vector<string>& masterDictionary) {
     vector<string> combinedRows;
@@ -180,17 +123,6 @@ string conway_encode(const string& chars, const vector<string>& masterDictionary
 
 const string CHARACTERS =
     " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
-random_device rd;
-mt19937 generator(rd());
-uniform_int_distribution<size_t> distribution(0, CHARACTERS.size() - 1);
-
-string random_string(size_t length) {
-    string result(length, '0');
-    for (auto& ch : result) {
-        ch = CHARACTERS[distribution(generator)];
-    }
-    return result;
-}
 
 void generate_combination(size_t number, size_t length, const string& characters, string& out) {
     size_t base = characters.size();
@@ -199,7 +131,6 @@ void generate_combination(size_t number, size_t length, const string& characters
         number /= base;
     }
 }
-
 
 bool next_combination(string& current, const string& characters) {
     for (size_t i = current.size(); i-- > 0;) {
@@ -218,75 +149,101 @@ void handle_signal(int signal) {
     }
 }
 
-void print_speed(size_t iterationsDone, size_t totalCharsDone, double charsPerSecondDone) {
-    const char* prefixes[] = {"c", "kc", "mc", "gc", "tc", "pc", "ec", "zc", "yc"};
-    size_t prefixCount = sizeof(prefixes) / sizeof(prefixes[0]);
-
-    size_t prefixIndex = 0;
-
-    while (charsPerSecondDone >= 1000 && prefixIndex < prefixCount - 1) {
-        charsPerSecondDone /= 1000;
-        totalCharsDone /= 1000;
-        ++prefixIndex;
-    }
-
-    cerr << "Iterations: " << iterationsDone << ", Total Chars: " << totalCharsDone << prefixes[prefixIndex]
-         << ", Performance: " << charsPerSecondDone << " " << prefixes[prefixIndex] << "/sec" << endl
-         << flush;
-}
-
-void dumpMasterDictionary(const vector<string>& masterDictionary, const string& outputFile) {
-    // Dumps the dictionary to a hpp file so we can compile it
-    ofstream outFile(outputFile);
-    if (!outFile.is_open()) {
-        throw runtime_error("Failed to open file for writing.");
-    }
-
-    outFile << "#pragma once\n\n";
-    outFile << "#include <string>\n";
-    outFile << "#include <vector>\n\n";
-    outFile << "static const std::vector<std::string> preloadedMasterDictionary = {\n";
-
-    for (const auto& entry : masterDictionary) {
-        outFile << "    R\"(" << entry << ")\",\n";  // Use raw string literals
-    }
-
-    outFile << "};\n";
-    outFile.close();
-}
-
 mutex statsMutex;
 size_t totalChars = 0;
 size_t iterations = 0;
 
-void workerFunction(size_t start, size_t end, const vector<string>& masterDictionary, size_t testLength, const string& characters) {
+void workerFunction(size_t start, size_t end, const vector<string>& masterDictionary, size_t testLength, const string& characters, const vector<const char*>& apgluxeArgs) {
     string currentPattern(testLength, characters.front());
 
-    for (size_t i = start; i < end && running; ++i) {
-        generate_combination(i, testLength, characters, currentPattern);
-        string encoded = conway_encode(currentPattern, masterDictionary);
+    // Create a pipe for communication
+    int pipefd[2];
+    if (pipe(pipefd) == -1) {
+        perror("pipe");
+        return;
+    }
 
-        {
-            lock_guard<mutex> lock(coutMutex);
-            cout << "x = 0, y = 0, rule=B3/S23\n" << encoded << endl;
+    pid_t pid = fork();
+    if (pid == -1) {
+        perror("fork");
+        return;
+    }
+
+    if (pid == 0) {  // Child process
+        // Close the write end of the pipe
+        close(pipefd[1]);
+
+        // Redirect the read end of the pipe to stdin
+        dup2(pipefd[0], STDIN_FILENO);
+
+        // Close the read end of the pipe after duplication
+        close(pipefd[0]);
+
+        // Execute apgluxe with collected args
+        execvp("./apgluxe", const_cast<char* const*>(apgluxeArgs.data()));
+        perror("execlp"); // If exec failed
+        exit(EXIT_FAILURE);
+    } else {  // Parent process
+        // Close the read end of the pipe
+        close(pipefd[0]);
+
+        // Write to the pipe
+        for (size_t i = start; i < end && running; ++i) {
+            generate_combination(i, testLength, characters, currentPattern);
+            string encoded = conway_encode(currentPattern, masterDictionary);
+
+            {
+                string output = "x = 0, y = 0, rule=B3/S23\n" + encoded + "\n";
+                if (write(pipefd[1], output.c_str(), output.size()) == -1) {
+                    perror("write");
+                }
+            }
+
+            {
+                lock_guard<mutex> lock(statsMutex);
+                totalChars += currentPattern.size();
+                ++iterations;
+            }
         }
 
-        {
-            lock_guard<mutex> lock(statsMutex);
-            totalChars += currentPattern.size();
-            ++iterations;
+        // Send two newlines before closing the write end of the pipe
+        string endTransmission = "\n\n";
+        if (write(pipefd[1], endTransmission.c_str(), endTransmission.size()) == -1) {
+            perror("write");
+        }
+
+        // Close the write end of the pipe to signal EOF
+        close(pipefd[1]);
+        
+        // Wait for the child process to exit
+        int status;
+        waitpid(pid, &status, 0);
+
+        // Check the status of the child process
+        if (WIFEXITED(status)) {
+            int exitStatus = WEXITSTATUS(status);
+            if (exitStatus != 0) {
+                cerr << "Child exited with status " << exitStatus << endl;
+            }
+        } else if (WIFSIGNALED(status)) {
+            cerr << "Child process was terminated by signal " << WTERMSIG(status) << endl;
         }
     }
 }
 
 
 
-
-// ./recompile --symmetry letters_stdin --cuda
-// then `./conway -l <n> | ./apgluxe -t 1 -n 999999
+// ./recompile --symmetry letters_stdin
+// then `./conway -l <n> -- -t 1 -n 999999
 int main(int argc, char* argv[]) {
     size_t testLength = 2;  // Default value for test length
     int opt;
+
+    if(argc <= 1){
+        cerr << "Usage: " << argv[0] << " -l <testlength> -- <apgluxe arguments>" << endl;
+        cerr << "Example: \n" << "./conway -l 5 -- -t 1 -n 99" << endl;
+        return EXIT_FAILURE;
+    }
 
     // Option parsing
     while ((opt = getopt(argc, argv, "l:")) != -1) {
@@ -300,6 +257,15 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    vector<const char*> apgluxeArgs = {"apgluxe"};
+
+    // Add additional arguments after the `--`
+    for (int i = optind; i < argc; ++i){
+        apgluxeArgs.push_back(argv[i]);
+    }
+    apgluxeArgs.push_back(nullptr);
+
+
 
     size_t threadCount = thread::hardware_concurrency();
     size_t totalCombinations = std::pow(CHARACTERS.size(), testLength);
@@ -311,7 +277,7 @@ int main(int argc, char* argv[]) {
     for (size_t i = 0; i < threadCount; ++i) {
         size_t start = i * chunkSize;
         size_t end = (i == threadCount - 1) ? totalCombinations : (i + 1) * chunkSize;
-        workers.emplace_back(workerFunction, start, end, cref(masterDictionary), testLength, cref(CHARACTERS));
+        workers.emplace_back(workerFunction, start, end, cref(masterDictionary), testLength, cref(CHARACTERS), cref(apgluxeArgs));
     }
 
     for (auto& worker : workers) {

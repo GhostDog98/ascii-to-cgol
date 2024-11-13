@@ -82,6 +82,7 @@
         "queue": "cpp",
         "stack": "cpp",
         "list": "cpp",
-        "set": "cpp"
+        "set": "cpp",
+        "climits": "cpp"
     }
 }
