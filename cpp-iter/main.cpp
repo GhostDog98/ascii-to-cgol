@@ -1,24 +1,25 @@
-#include <signal.h>
-#include <signal.h>
-#include <thread>
-#include <mutex>
 #include <atomic>
 #include <bitset>
 #include <chrono>
+#include <climits>
+#include <csignal>
+#include <cstring>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <mutex>
 #include <random>
 #include <sstream>
 #include <string>
-#include <unordered_map>
-#include <vector>
-#include <cstring>
-#include <climits>
-#include <functional>
-#include "master.hpp"
 #include <sys/wait.h>
+#include <thread>
+#include <unordered_map>
 #include <unistd.h>
+#include <vector>
+
+#include "master.hpp"
 #include "preprocessing.hpp"
+
 using namespace std;
 
 atomic<bool> running(true);
@@ -149,14 +150,11 @@ void handle_signal(int signal) {
     }
 }
 
-mutex statsMutex;
-size_t totalChars = 0;
-size_t iterations = 0;
 
 #include <csignal>
 #include <thread>
 
-void workerFunction(size_t start, size_t end, const vector<string>& masterDictionary, size_t testLength, const string& characters, const vector<const char*>& apgluxeArgs) {
+void workerFunction(size_t start, size_t end, const vector<string>& masterDictionary, size_t testLength, const string& characters, const vector<const char*>& apgluxeArgs, size_t id) {
     string currentPattern(testLength, characters.front());
 
     int pipefd[2];
@@ -172,42 +170,47 @@ void workerFunction(size_t start, size_t end, const vector<string>& masterDictio
     }
 
     if (pid == 0) {  // Child process
-        close(pipefd[1]);  // Close unused write end
-        dup2(pipefd[0], STDIN_FILENO);
+        close(pipefd[1]);  // Close write end in the child
+        dup2(pipefd[0], STDIN_FILENO);  // Redirect read end to stdin
         close(pipefd[0]);
 
+        // Execute the apgluxe application
         execvp("./apgluxe", const_cast<char* const*>(apgluxeArgs.data()));
         perror("execvp");
         exit(EXIT_FAILURE);
     } else {  // Parent process
-        close(pipefd[0]);  // Close unused read end
+        close(pipefd[0]);  // Close read end in the parent
 
         for (size_t i = start; i < end && running; ++i) {
             generate_combination(i, testLength, characters, currentPattern);
             string encoded = conway_encode(currentPattern, masterDictionary);
 
+            string output = "x=0,y=0,r=B3/S23\n" + encoded + '\n';
+
+            // Add logs to check the output being sent
             {
-                string output = "x = 0, y = 0, rule=B3/S23\n" + encoded + "\n";
-                if (write(pipefd[1], output.c_str(), output.size()) == -1) {
-                    perror("write");
-                }
+                lock_guard<mutex> lock(coutMutex);
+                //cout << "Thread " << id << " writing: " << output << endl;
             }
 
-            {
-                lock_guard<mutex> lock(statsMutex);
-                totalChars += currentPattern.size();
-                ++iterations;
+            if (write(pipefd[1], output.c_str(), output.size()) == -1) {
+                perror("write");
+                break;
             }
         }
-        cout << "Finished generating..." << endl;
-        write(pipefd[1], "\n\n\n\n\n\n\n", 8);
-        close(pipefd[1]);  // Signal EOF by closing the write end
+
+        // Send the final game state after all combinations
+        string finalGameState = "x=0,y=0,r=B3/S23\n3o!";
+        if (write(pipefd[1], finalGameState.c_str(), finalGameState.size()) == -1) {
+            perror("write");
+        }
+
+        close(pipefd[1]);  // Close the write end to signal EOF
 
         // Wait for child process to exit, or timeout after 10 seconds
         std::thread timeoutThread([pid]() {
-            std::this_thread::sleep_for(std::chrono::seconds(10));
-            // If the child hasn't exited, send it a SIGTERM signal
-            if (kill(pid, 0) == 0) {  // Check if the process is still running
+            std::this_thread::sleep_for(std::chrono::seconds(999));
+            if (kill(pid, 0) == 0) {
                 kill(pid, SIGTERM);
                 cerr << "Child process did not exit in time and was terminated." << endl;
             }
@@ -228,9 +231,13 @@ void workerFunction(size_t start, size_t end, const vector<string>& masterDictio
         } else if (WIFSIGNALED(status)) {
             cerr << "Child process was terminated by signal " << WTERMSIG(status) << endl;
         }
+
+        {
+            lock_guard<mutex> lock(coutMutex);
+            cout << "Thread " << id << " finished generating." << endl;
+        }
     }
 }
-
 
 int main(int argc, char* argv[]) {
     size_t testLength = 2;  // Default value for test length
@@ -262,21 +269,32 @@ int main(int argc, char* argv[]) {
     }
     apgluxeArgs.push_back(nullptr);
 
+    // Verify and initialize masterDictionary before using
+    //vector<string> masterDictionary; // assume it's initiated and populated correctly
+    if (masterDictionary.empty()) {
+        cerr << "Master dictionary is not initialized properly." << endl;
+        return EXIT_FAILURE;
+    }
 
+    // Ensure apgluxe is executable
+    if (access("./apgluxe", X_OK) == -1) {
+        cerr << "apgluxe is not executable." << endl;
+        return EXIT_FAILURE;
+    }
 
-    size_t threadCount = thread::hardware_concurrency();
-    size_t totalCombinations = std::pow(CHARACTERS.size(), testLength);
-
-    //vector<string> masterDictionary = form_translator("your_font_file.txt");
+    size_t threadCount = std::max(2U, std::thread::hardware_concurrency());
     vector<thread> workers;
+    size_t totalCombinations = std::pow(CHARACTERS.size(), testLength);
     size_t chunkSize = totalCombinations / threadCount;
 
+    // Launch threads with unique work chunks
     for (size_t i = 0; i < threadCount; ++i) {
         size_t start = i * chunkSize;
         size_t end = (i == threadCount - 1) ? totalCombinations : (i + 1) * chunkSize;
-        workers.emplace_back(workerFunction, start, end, cref(masterDictionary), testLength, cref(CHARACTERS), cref(apgluxeArgs));
+        workers.emplace_back(workerFunction, start, end, cref(masterDictionary), testLength, cref(CHARACTERS), cref(apgluxeArgs), i);
     }
 
+    // Wait for all threads to complete
     for (auto& worker : workers) {
         if (worker.joinable()) {
             worker.join();
