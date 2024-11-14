@@ -1,4 +1,5 @@
 #include <atomic>
+#include <cerrno>
 #include <cmath>
 #include <csignal>
 #include <cstring>
@@ -191,85 +192,67 @@ void workerFunction(size_t start, size_t end, const vector<string>& masterDictio
                     size_t testLength, const string& characters,
                     const vector<const char*>& apgluxeArgs, size_t id) {
     string currentPattern(testLength, characters.front());
-    int pipefd[2];
 
-    if (pipe(pipefd) < 0) {
-        perror("pipe");
-        cout << "Error creating the pipe..." << endl;
+    // Construct the command string for popen
+    string command = "cat"; // Replace "cat" with the desired command/path if different
+    
+    for (const char* arg : apgluxeArgs) {
+        if (arg != nullptr) {
+            command += " ";
+            command += arg;
+        }
+    }
+
+    FILE* pipe = popen(command.c_str(), "w");
+    if (!pipe) {
+        perror("popen");
+        cout << "Error opening the pipe..." << endl;
         return;
     }
 
-    // Set the write end of the pipe to non-blocking
-    int flags = fcntl(pipefd[1], F_GETFL, 0);
-    fcntl(pipefd[1], F_SETFL, flags | O_NONBLOCK);
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        perror("fork");
-        cout << "Error forking a child..." << endl;
-        close(pipefd[0]);
-        close(pipefd[1]);
+    // Get file descriptor from pipe for next step
+    int pipefd = fileno(pipe);
+    if(pipefd == -1){
+        perror("fileno");
         return;
     }
 
-    if (pid == 0) {
-        // In the child process
-        close(pipefd[1]);  // Close unused write end
-        dup2(pipefd[0], STDIN_FILENO);
-        close(pipefd[0]);
+    // Set to non-blocking writes
+    int flags = fcntl(pipefd, F_GETFL, 0);
+    if( flags == -1 || fcntl(pipefd, F_SETFL, flags | O_NONBLOCK) == 1){
+        perror("fcntl");
+        return;
+    }
 
-        execvp("cat", const_cast<char* const*>(apgluxeArgs.data()));
-        cout << "error starting cat...";
-        perror("execvp");
-        exit(EXIT_FAILURE);
+    for (size_t i = start; i < end && running; ++i) {
+        generate_combination(i, testLength, characters, currentPattern);
+        string output = conway_encode(currentPattern, masterDictionary);
+        size_t written = 0;
 
-    } else {
-        // In the parent process
-        close(pipefd[0]);  // Close unused read end
-
-        const int pipeSize = 1048576;  // Pipe buffer size
-        fcntl(pipefd[1], F_SETPIPE_SZ, pipeSize);
-
-        for (size_t i = start; i < end && running; ++i) {
-            generate_combination(i, testLength, characters, currentPattern);
-            string output = conway_encode(currentPattern, masterDictionary);
-
-            size_t written = 0;
-            while (written < output.size() && running) {
-                ssize_t bytes = write(pipefd[1], output.c_str() + written, output.size() - written);
-                if (bytes == -1) {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                        // Pipe is full, wait and retry the remaining bytes...
-                        std::this_thread::sleep_for(std::chrono::milliseconds(10));  // Short sleep
-                        continue;
-                    } else {
-                        perror("write");
-                        break;
-                    }
-                }
-                written += bytes;
+        // Non blocking write allows us to sleep for a bit if our write would block the child
+        while (written < output.size() && running) {
+            ssize_t result = write(pipefd, output.c_str() + written, output.size() -written);
+            if (result == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                this_thread::sleep_for(chrono::milliseconds(10)); //sleep then try again
+            } else if (result == -1){
+                perror("fwrite");
+                break;
+            }else {
+                written += result;
             }
-
-            fsync(pipefd[1]);  // Ensure data is flushed after each pattern
         }
+        fflush(pipe); // Ensure data is flushed after each pattern
+    }
 
-        fsync(pipefd[1]);
-        fsync(pipefd[0]);
-        close(pipefd[0]);
-        close(pipefd[1]);  // Close write end once finished
-
-        int status;
-        waitpid(pid, &status, 0);
-
-        if (WIFEXITED(status)) {
-            lock_guard<mutex> lock(coutMutex);
-            cout << "Thread " << id << " finished. Exit code: " << WEXITSTATUS(status) << endl;
-        } else if (WIFSIGNALED(status)) {
-            lock_guard<mutex> lock(coutMutex);
-            cerr << "Thread " << id << " terminated by signal: " << WTERMSIG(status) << endl;
-        }
+    if (pclose(pipe) != 0) {
+        lock_guard<mutex> lock(coutMutex);
+        cerr << "Thread " << id << " failed. Error closing the pipe." << endl;
+    } else {
+        lock_guard<mutex> lock(coutMutex);
+        cout << "Thread " << id << " finished successfully." << endl;
     }
 }
+
 
 
 
@@ -286,7 +269,7 @@ int main(int argc, char* argv[]) {
 
     ScopedSignalHandler sigintHandler(SIGINT, handle_signal);
 
-    vector<const char*> apgluxeArgs = {"cat"};
+    vector<const char*> apgluxeArgs = {""};
     while ((opt = getopt(argc, argv, "l:")) != -1) {
         if (opt == 'l') {
             testLength = stoi(optarg);
@@ -312,23 +295,31 @@ int main(int argc, char* argv[]) {
 
     size_t threadCount = max(2U, thread::hardware_concurrency());
     cout << "Starting " << threadCount << " threads..." << endl;
-    ThreadPool threadPool(threadCount);
 
     size_t totalCombinations = pow(CHARACTERS.size(), testLength);
     cout << "Detected " << totalCombinations << " number of combinations for length " << testLength << endl;
     size_t chunkSize = totalCombinations / threadCount;
     size_t remainder = totalCombinations % threadCount;
 
+    std::vector<std::thread> threads;
     size_t start = 0;
+
     for (size_t i = 0; i < threadCount; ++i) {
         size_t end = start + chunkSize + (i < remainder ? 1 : 0);
-        cout << "Starting thread for tasks " << start << "-" << end << endl;
-        threadPool.enqueueTask([=, &apgluxeArgs]() {
-            workerFunction(start, end, masterDictionary, testLength, CHARACTERS, apgluxeArgs, i);
+        cout << "Starting thread " << (i+1) << " for tasks " << (start+1) << "-" << (end) << endl;
+
+        threads.emplace_back([start, end, testLength, &characters = CHARACTERS, &apgluxeArgs, i] {
+            workerFunction(start, end, masterDictionary, testLength, characters, apgluxeArgs, i);
         });
 
         start = end;
     }
 
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    std::cout << "All threads completed.\n";
     return 0;
 }
+
