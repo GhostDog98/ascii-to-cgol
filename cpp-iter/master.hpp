@@ -1,3 +1,9 @@
+#pragma once
+
+#include <string>
+#include <vector>
+
+static const std::vector<std::string> masterDictionary = {
     R"(00000000
 00000000
 00000000
@@ -1612,4 +1618,5 @@
 00000000
 00000000
 00000000
-)"
+)",
+};
