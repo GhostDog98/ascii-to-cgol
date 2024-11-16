@@ -110,6 +110,22 @@ string runLengthEncode(const string& str) {
     }
     return encoded;
 }
+/*
+string runLengthEncode(const string& input){
+    // Convert to byte array and calc size
+    const uint8_t* pIn = reinterpret_cast<const uint8_t*>(input.data());
+    const size_t inSize = input.size();
+
+    // prep output buffer
+    uint8_t* pOut = new uint8_t[inSize];
+    size_t pOutIndex = 0;
+
+    uint8_t maxFreqSymbol = "o";
+    int64_t compressedSize = CONCAT3(rle8_, CODEC, compress_single_sse2)(pIn, inSize, pOut, &pOutIndex, maxFreqSymbol, ...moreArgs);
+
+}*/
+
+
 
 string translateFontFile(const string& chars, const vector<string>& masterDictionary) {
     vector<string> combinedRows;
@@ -155,7 +171,7 @@ string conway_encode(const string& chars, const vector<string>& masterDictionary
 
     istringstream stream(result);
     string line;
-
+    // 6500 per second when rle'd, 6000 when not
     while (getline(stream, line) && y_max < 16) {
         if (!line.empty() && line.find('1') != string::npos) {
             x_max = max(x_max, static_cast<int>(line.size()));
@@ -167,7 +183,8 @@ string conway_encode(const string& chars, const vector<string>& masterDictionary
     }
 
     ostringstream final_stream;
-    final_stream << "x=0,y=0,r=B3/S23\n";
+    //final_stream << "x=0,y=0,r=B3/S23\n";
+    final_stream << "x\n"; // why does this work lmfao
     for (int i = 0; i < y_max; ++i) {
         final_stream << lines[i];
         if (i < y_max - 1) {
@@ -194,7 +211,7 @@ void workerFunction(size_t start, size_t end, const vector<string>& masterDictio
     string currentPattern(testLength, characters.front());
 
     // Construct the command string for popen
-    string command = "cat"; // Replace "cat" with the desired command/path if different
+    string command = "./apgluxe --rule=life"; 
     
     for (const char* arg : apgluxeArgs) {
         if (arg != nullptr) {
@@ -258,6 +275,7 @@ void workerFunction(size_t start, size_t end, const vector<string>& masterDictio
 
 
 int main(int argc, char* argv[]) {
+    
     size_t testLength = 2;
     int opt;
 
@@ -293,7 +311,7 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    size_t threadCount = max(2U, thread::hardware_concurrency());
+    size_t threadCount = 1;//max(2U, thread::hardware_concurrency());
     cout << "Starting " << threadCount << " threads..." << endl;
 
     size_t totalCombinations = pow(CHARACTERS.size(), testLength);
@@ -320,6 +338,7 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "All threads completed.\n";
+    
     return 0;
 }
 

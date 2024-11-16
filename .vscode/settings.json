@@ -83,7 +83,9 @@
     "stack": "cpp",
     "list": "cpp",
     "set": "cpp",
-    "climits": "cpp"
+    "climits": "cpp",
+    "csignal": "cpp",
+    "cerrno": "cpp"
   },
   "C_Cpp_Runner.msvcBatchPath": "",
   "C_Cpp_Runner.cCompilerPath": "gcc",

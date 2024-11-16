@@ -36,6 +36,7 @@ def read_between_markers(file_path, start_marker="STARTCHAR", end_marker="ENDCHA
     if current_key is not None:
         contents[current_key] = current_section
 
+
     return contents
 
 def form_translator(file_to_read):
@@ -53,6 +54,7 @@ def form_translator(file_to_read):
 
 def translate_font_file(file_path, chars):
     master_dictionary = form_translator(file_path)
+    #print(master_dictionary)
     char_arrays = [master_dictionary.get(char, []) for char in chars]
 
     # Combine arrays by merging rows from each character

@@ -1,12 +1,14 @@
 # Compiler and flags
 CXX = g++
-CXXFLAGS = -std=c++20 -Wall -Wextra -Wpedantic -pedantic -Ofast -fsanitize=address,undefined -g
+CXXFLAGS = -std=c++20 -Wall -Wextra -Wpedantic -pedantic -Ofast -g
 CXXFLAGS += -fdiagnostics-color=always # Easier to read
 
 # Check the operating system
 ifeq ($(shell uname), Darwin)
     # macOS (Darwin)
     CXX := g++-14
+else # Why is fsanitize broken on macos? because god hates me
+	CXXFLAGS += -fsanitize=address,undefined 
 endif
 
 # Target executable name
