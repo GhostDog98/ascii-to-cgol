@@ -2,7 +2,8 @@
 CXX = g++
 CXXFLAGS = -std=c++20 -Wall -Wextra -Wpedantic -pedantic -Ofast -g
 CXXFLAGS += -fdiagnostics-color=always # Easier to read
-
+LINKFLAGS = -I ./libs/hypersonic-rle-kit/src 
+LINKFLAGS += -L./ -lhsrlekit
 # Check the operating system
 ifeq ($(shell uname), Darwin)
     # macOS (Darwin)
@@ -15,13 +16,13 @@ endif
 TARGET = conway
 
 # Source files
-SRC = main.cpp
+SRC = min-example.cpp
 
 # Build target
 all: $(TARGET)
 
 $(TARGET): $(SRC)
-	$(CXX) $(CXXFLAGS) -o $(TARGET) $(SRC)
+	$(CXX) $(CXXFLAGS) $(SRC) -o $(TARGET) $(LINKFLAGS)
 
 # Clean target
 clean:

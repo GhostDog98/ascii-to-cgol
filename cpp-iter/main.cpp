@@ -15,7 +15,11 @@
 #include <vector>
 #include <fcntl.h>
 #include <chrono>
-
+#include <iostream>
+#include <string>
+#include <unordered_map>
+//#include "./libs/hypersonic-rle-kit/src/rle.h"
+#include "rle.h"
 #include <condition_variable>
 
 #include "master.hpp"
@@ -95,7 +99,7 @@ void handle_signal(int signal) {
         running = false;
     }
 }
-
+/*
 string runLengthEncode(const string& str) {
     int n = str.size();
     string encoded;
@@ -109,7 +113,52 @@ string runLengthEncode(const string& str) {
         encoded += to_string(count) + str[i];
     }
     return encoded;
+}*/
+
+// Define function types for compression
+using CompressFunc = std::function<uint32_t(const uint8_t*, const uint32_t, uint8_t*, const uint32_t)>;
+using BoundsFunc = std::function<uint32_t(const uint32_t)>;
+
+// Create a helper function to initialize the map
+std::unordered_map<std::string, std::pair<CompressFunc, BoundsFunc>> initializeCompressionMethods() {
+    std::unordered_map<std::string, std::pair<CompressFunc, BoundsFunc>> methods;
+
+    methods["rle8_low_entropy"] = {rle8_low_entropy_compress, rle8_low_entropy_compress_bounds};
+    methods["rle8_low_entropy_short"] = {rle8_low_entropy_short_compress, rle8_low_entropy_short_compress_bounds};
+    methods["rle8_multi"] = {rle8_multi_compress, rle_compress_bounds};
+    methods["rle8_single"] = {rle8_single_compress, rle_compress_bounds};
+    // Add more compression methods here as needed
+
+    return methods;
 }
+
+std::string run_length_encode(const std::string& text_to_encode, const std::string& compression_type) {
+    static auto compression_methods = initializeCompressionMethods();
+
+    // Find the correct compression method
+    const auto it = compression_methods.find(compression_type);
+    if (it == compression_methods.end()) {
+        throw std::invalid_argument("Unsupported compression type");
+    }
+
+    const CompressFunc& compress_func = it->second.first;
+    const BoundsFunc& bounds_func = it->second.second;
+
+    uint8_t* pIn = (uint8_t*)text_to_encode.data();
+    uint32_t inSize = static_cast<uint32_t>(text_to_encode.size());
+
+    uint32_t compressedBufferSize = bounds_func(inSize);
+    std::string compressedData(compressedBufferSize, '\0');
+    uint32_t compressedSize = compress_func(pIn, inSize, (uint8_t*)compressedData.data(), compressedBufferSize);
+
+    if (compressedSize == 0) {
+        throw std::runtime_error("Compression failed");
+    }
+
+    compressedData.resize(compressedSize);
+    return compressedData;
+}
+
 /*
 string runLengthEncode(const string& input){
     // Convert to byte array and calc size
@@ -178,7 +227,7 @@ string conway_encode(const string& chars, const vector<string>& masterDictionary
             for (char& ch : line) {
                 ch = (ch == '0') ? 'b' : 'o';
             }
-            lines[y_max++] = runLengthEncode(line);
+            lines[y_max++] = run_length_encode(line, "rle8_single");//runLengthEncode(line);
         }
     }
 
@@ -211,8 +260,8 @@ void workerFunction(size_t start, size_t end, const vector<string>& masterDictio
     string currentPattern(testLength, characters.front());
 
     // Construct the command string for popen
-    string command = "./apgluxe --rule=life"; 
-    
+    //string command = "./apgluxe --rule=life"; 
+    string command = "cat";
     for (const char* arg : apgluxeArgs) {
         if (arg != nullptr) {
             command += " ";
@@ -311,7 +360,7 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    size_t threadCount = 1;//max(2U, thread::hardware_concurrency());
+    size_t threadCount = max(2U, thread::hardware_concurrency());
     cout << "Starting " << threadCount << " threads..." << endl;
 
     size_t totalCombinations = pow(CHARACTERS.size(), testLength);

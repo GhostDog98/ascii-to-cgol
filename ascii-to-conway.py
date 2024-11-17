@@ -108,7 +108,7 @@ def conway_rle_translate(result):
         if "1" in line:
             line = line.rstrip('0')  # remove end 0's
         line = line.replace('0', 'b').replace('1', 'o')  # replace dead and live cells
-        rest_of_lines.append(rle_encode(line))
+        rest_of_lines.append(line)#rle_encode(line))
 
     print(first_lines)
     for line in rest_of_lines:
@@ -120,6 +120,6 @@ if __name__ == "__main__":
     # Example usage
     file_path = 'comic_sans.bdf'  # Replace with your actual file path
 
-    #chars_to_translate = 'testing'  # The characters you want to combine
-    result = translate_font_file(file_path, "!")
+    chars_to_translate = 'testing'  # The characters you want to combine
+    result = translate_font_file(file_path, chars_to_translate)
     conway_rle_translate(result)
